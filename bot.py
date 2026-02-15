@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message
 logger = logging.getLogger("tiktok_merge_bot")
 
 # ----- ضع توكن البوت هنا محلياً فقط -----
-BOT_TOKEN = "8404641547:AAHUKJZRFUO9CulPjTXtakozAToR8hLi3c0"
+BOT_TOKEN = "8234146841:AAHpiF5aQBChCjC3V5BfjondIUHPm65MzBs"
 # ----------------------------------------
 if BOT_TOKEN == "YOUR_TOKEN_HERE" or not BOT_TOKEN:
     raise SystemExit("ضع التوكن الحقيقي داخل BOT_TOKEN في هذا الملف قبل التشغيل (محلياً فقط).")
