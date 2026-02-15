@@ -1,27 +1,16 @@
 #!/usr/bin/env python3
-# bot.py - نسخة محسّنة: تعرض كل المعلومات + زر منفصل لكشف "بيانات المصادقة"
-# يكتب كل عملية بحث في ملف CSV محلي ويُنَبّّه الأدمن إن وُضع ADMIN_CHAT_ID.
-# أمنياً: لا ترفع هذا الملف للتخزين العام إذا وضعت توكن حقيقي داخله. ضع التوكن محلياً فقط.
+# bot.py - نسخة محسّنة: تعرض كل المعلومات + زر منفصل لكشف "بيانات المصادقة" (تُجلب من oouss.find_account_end_point)
+# ملاحظة أمنية: لا تضع توكنك في دردشات عامة. عدّل المتغير BOT_TOKEN محلياً قبل التشغيل.
 
 import logging
 import html
 import time
 import threading
-import os
-import csv
-import datetime
 from typing import Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-
-# Optional: load .env locally if you want, لكن افتراضياً ستضع التوكن داخل هذا الملف كما طلبت
-try:
-    from dotenv import load_dotenv  # type: ignore
-    load_dotenv()
-except Exception:
-    pass
 
 # استدعاء ملفاتك المحلية - تأكد من وجود ouss.py و tiktok_fetcher.py في نفس المجلد
 import tiktok_fetcher as tf
@@ -31,34 +20,25 @@ import ouss as oouss
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 logger = logging.getLogger("tiktok_merge_bot")
 
-# ----- ضع توكن البوت هنا محلياً فقط (نفس أسلوب ملفك السابق) -----
-# استبدل النص داخل علامات الاقتباس بتوكن البوت الفعلي لديك، ثم شغّل الملف محلياً.
+# ----- ضع توكن البوت هنا محلياً فقط -----
 BOT_TOKEN = "8404641547:AAHUKJZRFUO9CulPjTXtakozAToR8hLi3c0"
-# ---------------------------------------------------------------
-if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or not BOT_TOKEN:
+# ----------------------------------------
+if BOT_TOKEN == "YOUR_TOKEN_HERE" or not BOT_TOKEN:
     raise SystemExit("ضع التوكن الحقيقي داخل BOT_TOKEN في هذا الملف قبل التشغيل (محلياً فقط).")
 
-# ----- ضع هنا إيدي الأدمن أو اتركه فارغاً لتعطيل إشعارات الأدمن -----
-# يمكن أن تضع chat id رقمي (الأفضل) أو username مع @ (قد يفشل إذا لم تفتح محادثة مع البوت مسبقاً)
-ADMIN_CHAT_ID = "1046998555"
-if ADMIN_CHAT_ID == "YOUR_ADMIN_CHAT_ID_HERE" or not ADMIN_CHAT_ID:
-    ADMIN_CHAT_ID = None
-# ------------------------------------------------------------------
-
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
-
-# ------------------ إعدادات سجل البحث (قابل للتعديل) ------------------
-SEARCH_LOG_PATH = os.getenv("SEARCH_LOG_PATH", "searches.csv")
 
 # ------------------ أمان: إجابة آمنة على callback queries ------------------
 def safe_answer_callback(callback_id: str, text: Optional[str] = None, show_alert: bool = False, cache_time: Optional[int] = None):
     """
     Attempt to answer a callback_query but ignore "query is too old" / "query id is invalid" errors.
+    Logs other unexpected exceptions.
     """
     try:
         kwargs = {}
         if text is not None:
             kwargs['text'] = text
+        # some TeleBot versions expect show_alert param; include it explicitly
         kwargs['show_alert'] = bool(show_alert)
         if cache_time is not None:
             kwargs['cache_time'] = int(cache_time)
@@ -73,30 +53,24 @@ def safe_answer_callback(callback_id: str, text: Optional[str] = None, show_aler
         logger.exception("Unexpected error when calling answer_callback_query")
 
 
-# ------------------ كاش بسيط مع TTL في الذاكرة (آمن للـ threads) ------------------
+# ------------------ كاش بسيط مع TTL في الذاكرة ------------------
 class TTLCache:
     def __init__(self, ttl: int = 600):
         self.ttl = ttl
         self._store: Dict[str, tuple] = {}
-        self._lock = threading.Lock()
 
     def get(self, key: str):
-        with self._lock:
-            v = self._store.get(key)
-            if not v:
-                return None
-            val, ts = v
-            if time.time() - ts > self.ttl:
-                try:
-                    del self._store[key]
-                except KeyError:
-                    pass
-                return None
-            return val
+        v = self._store.get(key)
+        if not v:
+            return None
+        val, ts = v
+        if time.time() - ts > self.ttl:
+            del self._store[key]
+            return None
+        return val
 
     def set(self, key: str, val):
-        with self._lock:
-            self._store[key] = (val, time.time())
+        self._store[key] = (val, time.time())
 
 fetch_cache = TTLCache(ttl=900)
 info_cache = TTLCache(ttl=900)
@@ -122,7 +96,7 @@ def merge_results(tf_res: Dict[str, Any], oouss_info: Dict[str, Any], endpoint_r
     merged["name"] = prefer(tf_res, oouss_info, "name") or prefer(tf_res, oouss_info, "nickname") or merged.get("name", "")
     merged["bio"] = prefer(tf_res, oouss_info, "bio") or prefer(tf_res, oouss_info, "signature") or merged.get("bio", "")
     merged["avatar_larger"] = prefer(tf_res, oouss_info, "avatar_larger") or (oouss_info.get("avatar") if oouss_info else merged.get("avatar_larger",""))
-    merged["followers"] = prefer(tf_res, oouss_info, "followers") or (oouss_info.get("followers") if oouss_info else (oouss_info.get("followerCount","") if oouss_info else merged.get("followers","")))
+    merged["followers"] = prefer(tf_res, oouss_info, "followers") or (oouss_info.get("followers") if oouss_info else oouss_info.get("followerCount","") if oouss_info else merged.get("followers",""))
     merged["following"] = prefer(tf_res, oouss_info, "following") or (oouss_info.get("following","") if oouss_info else merged.get("following",""))
     merged["likes"] = prefer(tf_res, oouss_info, "likes") or (oouss_info.get("like","") if oouss_info else merged.get("likes",""))
     merged["videos"] = prefer(tf_res, oouss_info, "videos") or (oouss_info.get("video","") if oouss_info else merged.get("videos",""))
@@ -169,7 +143,7 @@ def build_simple_ar_message(merged: Dict[str, Any]) -> str:
     if merged.get("bio"): lines.append(f"📝 البايو: {merged.get('bio')}")
     if merged.get("country"): lines.append(f"🌍 البلد: {merged.get('country')}")
     if merged.get("created_date"): lines.append(f"📅 تاريخ التسجيل: {merged.get('created_date')}")
-    if merged.get("followers"): lines.append(f"👥 المتابعين: {merged.get('followers')}")
+    if merged.get("followers"): lines.append(f"👥 ا��متابعين: {merged.get('followers')}")
     if merged.get("following"): lines.append(f"🔁 يتابع: {merged.get('following')}")
     if merged.get("likes"): lines.append(f"❤️ لايكات: {merged.get('likes')}")
     if merged.get("videos"): lines.append(f"🎬 فيديوات: {merged.get('videos')}")
@@ -207,56 +181,6 @@ def build_auth_message_from_endpoint(endpoint_res: Optional[Dict[str, Any]], use
         lines.append(f"  - منصات OAuth: {', '.join(platforms)}")
     lines.append(f"• Passkey (التحقق بدون كلمة مرور): {'✅ نعم' if has_passkey else '❌ لا'}")
     return "\n".join(lines)
-
-# ------------------ سجل عمليات البحث: CSV + إشعار للأدمن ------------------
-def _ensure_csv_header(path: str):
-    """إنشاء الملف مع ترويسة إن لم يكن موجوداً."""
-    if not os.path.exists(path):
-        try:
-            with open(path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["timestamp", "requester_id", "requester_username", "searched_username", "account_name"])
-        except Exception:
-            logger.exception("Failed to create search log header at %s", path)
-
-def log_search_event(requester_message, searched_username: str, account_name: Optional[str]):
-    """
-    يسجل السطر التالي: timestamp, requester_id, requester_username, searched_username, account_name
-    ويُرسل إشعاراً للأدمن إذا تم تحديد ADMIN_CHAT_ID.
-    """
-    try:
-        _ensure_csv_header(SEARCH_LOG_PATH)
-        ts = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-        requester_id = getattr(requester_message.from_user, "id", "")
-        requester_un = getattr(requester_message.from_user, "username", "") or ""
-        row = [ts, requester_id, requester_un, searched_username, account_name or ""]
-        # اكتب إلى CSV (append)
-        try:
-            with open(SEARCH_LOG_PATH, "a", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(row)
-        except Exception:
-            logger.exception("Failed to append search log row")
-
-        # إرسال إشعار للأدمن في ثريد مستقل حتى لا نوقف المعالجة
-        if ADMIN_CHAT_ID:
-            def notify_admin():
-                try:
-                    admin_text = (
-                        f"🔔 بحث جديد في البوت\n"
-                        f"• بواسطة: {requester_un or requester_id}\n"
-                        f"• يوزر البحث: @{searched_username}\n"
-                        f"• اسم الحساب: {account_name or 'غير متوفر'}\n"
-                        f"• الوقت (UTC): {ts}"
-                    )
-                    bot.send_message(ADMIN_CHAT_ID, admin_text)
-                except Exception:
-                    logger.exception("Failed to notify admin about search event")
-            threading.Thread(target=notify_admin, daemon=True).start()
-
-    except Exception:
-        logger.exception("log_search_event failed")
-
 
 # ------------------ Handlers ------------------
 @bot.message_handler(commands=['start'])
@@ -327,12 +251,12 @@ def callback_show_auth(call):
         threading.Thread(target=worker, daemon=True).start()
 
     except Exception:
+        # If acknowledging or starting worker fails, try to inform user gracefully
         try:
             safe_answer_callback(call.id, "حدث خطأ أثناء جلب بيانات المصادقة.")
         except Exception:
             logger.exception("callback_show_auth final fallback failed")
         logger.exception("callback_show_auth failed")
-
 
 # ------------------ الأداء: تنفيذ متوازي + كاش ------------------
 PARALLEL_TIMEOUT = 8
@@ -341,14 +265,9 @@ MAX_WORKERS = 4
 
 @bot.message_handler(func=lambda m: True)
 def handle_username(message):
-    username = (message.text or "").strip().lstrip("@")
+    username = message.text.strip().lstrip("@")
     if not username:
         bot.reply_to(message, "الرجاء إرسال اسم المستخدم بدون @")
-        return
-
-    # قيود بسيطة لطول اليوزر (تجنب إدخالات عشوائية طويلة جداً)
-    if len(username) > 64:
-        bot.reply_to(message, "اسم المستخدم طويل جداً.")
         return
 
     status_msg = bot.reply_to(message, f"جارٍ الفحص: @{html.escape(username)} ...")
@@ -406,13 +325,7 @@ def handle_username(message):
 
     merged = merge_results(tf_res if isinstance(tf_res, dict) else {}, oouss_info if isinstance(oouss_info, dict) else {}, endpoint_res if isinstance(endpoint_res, dict) else {}, lvl_override=lvl_override)
 
-    # سجل البحث: اسم الباحث (من message) + اليوزر المطلوب + اسم الحساب (إن وجد)
-    try:
-        account_name = merged.get("name") or merged.get("username") or ""
-        # سجل الحدث في ملف CSV وأرسل إشعارًا للأدمن (إن وُجد)
-        log_search_event(message, username, account_name)
-    except Exception:
-        logger.exception("Failed to log search event")
+    logger.debug("MERGED DATA for %s: %s", username, merged)
 
     # بناء أزرار: إضافة زر لعرض بيانات المصادقة مفصّلة
     keyboard = InlineKeyboardMarkup()
